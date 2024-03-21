@@ -68,6 +68,8 @@ def get_cached_file_hashes():
 
 def get_file_hash(file_path):
     # check if the file hash is already cached
+    # replace \ with / in file_path
+    file_path = file_path.replace('\\', '/')
     cached_file_hashes = get_cached_file_hashes()
     file_name = os.path.basename(file_path)
     if file_name in cached_file_hashes:
@@ -218,7 +220,8 @@ def read_styles():
 def find_and_replace_wildcards(prompt, offset_seed, debug=False):
     # wildcards use the __file_name__ syntax with optional |word_to_find
     wildcard_path = os.path.join(folder_paths.base_path, 'wildcards')
-    wildcard_regex = r'(\[(\d+)\$\$)?__((?:[^|_]+_)*[^|_]+)((?:\|[^|]+)*)__\]?'
+    wildcard_regex = r'((\d+)\$\$)?__(!|\+|-|\*)?((?:[^|_]+_)*[^|_]+)((?:\|[^|]+)*)__' 
+    # r'(\[(\d+)\$\$)?__((?:[^|_]+_)*[^|_]+)((?:\|[^|]+)*)__\]?'
     match_strings = []
     random.seed(offset_seed)
     offset = offset_seed
@@ -227,9 +230,18 @@ def find_and_replace_wildcards(prompt, offset_seed, debug=False):
     last_end = 0
 
     for m in re.finditer(wildcard_regex, prompt):
-        full_match, lines_count_str, actual_match, words_to_find_str = m.groups()
+        full_match, lines_count_str, offset_type, actual_match, words_to_find_str = m.groups()
         # Append everything up to this match
         new_prompt += prompt[last_end:m.start()]
+
+        # lock indicator
+        lock_indicator = offset_type == '!'
+        # increment indicator
+        increment_indicator = offset_type == '+'
+        # decrement indicator
+        decrement_indicator = offset_type == '-'
+        # random indicator
+        random_indicator = offset_type == '*'
 
     #for full_match, lines_count_str, actual_match, words_to_find_str in re.findall(wildcard_regex, prompt):
         words_to_find = words_to_find_str.split('|')[1:] if words_to_find_str else None
@@ -254,7 +266,16 @@ def find_and_replace_wildcards(prompt, offset_seed, debug=False):
             store_offset = None
             if actual_match in match_strings:
                 store_offset = offset
-                offset = random.randint(0, 1000000)
+                if lock_indicator:
+                    offset = offset_seed
+                elif random_indicator:
+                    offset = random.randint(0, 1000000)
+                elif increment_indicator:
+                    offset = offset_seed + 1
+                elif decrement_indicator:
+                    offset = offset_seed - 1
+                else:
+                    offset = random.randint(0, 1000000)
             selected_lines = []
             with open(file_path, 'r', encoding='utf-8') as file:
                 file_lines = file.readlines()
@@ -418,6 +439,17 @@ def add_metadata_to_dict(info_dict, **kwargs):
             else:
                 info_dict[key].append(value)
 
+def load_lora(model, clip, lora_filename, lora_multiplier, lora_clip_multiplier):
+    try:
+        #full_lora_path = folder_paths.get_full_path("loras", lora_filename)
+        ll = LoraLoader()
+        model, clip_lora = ll.load_lora(model, clip, lora_filename, lora_multiplier, lora_clip_multiplier)
+        print('Loading LoRA: ' + lora_filename + ' with multiplier: ' + str(lora_multiplier))
+        return model, clip_lora
+    except:
+        print('Warning: LoRA file ' + lora_filename + ' not found or file path is invalid. Skipping this LoRA.')
+        return model, clip
+
 def extract_and_load_loras(text, model, clip):
     # load loras detected in the prompt text
     # The text for adding LoRA to the prompt, <lora:filename:multiplier>, is only used to enable LoRA, and is erased from prompt afterwards
@@ -438,14 +470,13 @@ def extract_and_load_loras(text, model, clip):
             if '.safetensors' not in lora_filename:
                 lora_filename += '.safetensors'
             # get the lora multiplier
-            lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
-            print('Loading LoRA: ' + lora_filename + ' with multiplier: ' + str(lora_multiplier))
+            try:
+                lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
+            except:
+                lora_multiplier = 1.0
             # apply the lora to the clip using the LoraLoader.load_lora function
-            # def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
-            # ...
-            # return (model_lora, clip_lora)
             # apply the lora to the clip
-            model, clip_lora = LoraLoader.load_lora(model, clip, lora_filename, lora_multiplier, lora_multiplier)
+            model, clip = load_lora(model, clip, lora_filename, lora_multiplier, lora_multiplier)
     # strip the lora prompts from the text
     stripped_text = re.sub(lora_re, '', stripped_text)
     return model, clip, stripped_text
@@ -781,14 +812,14 @@ class RatioAdvanced:
         # check if target_fit_size not 0
         if target_fit_size != 0:
             target_w, target_h = self.fit(target_w, target_h, target_fit_size)
-        prompt.get(str(unique_id))['inputs']['output_latent_w'] = str(latent_width)
-        prompt.get(str(unique_id))['inputs']['output_latent_h'] = str(latent_height)
-        prompt.get(str(unique_id))['inputs']['output_cte_w'] = str(cte_w)
-        prompt.get(str(unique_id))['inputs']['output_cte_h'] = str(cte_h)
-        prompt.get(str(unique_id))['inputs']['output_target_w'] = str(target_w)
-        prompt.get(str(unique_id))['inputs']['output_target_h'] = str(target_h)
-        prompt.get(str(unique_id))['inputs']['output_crop_w'] = str(crop_w)
-        prompt.get(str(unique_id))['inputs']['output_crop_h'] = str(crop_h)
+        #prompt.get(str(unique_id))['inputs']['output_latent_w'] = str(latent_width)
+        #prompt.get(str(unique_id))['inputs']['output_latent_h'] = str(latent_height)
+        #prompt.get(str(unique_id))['inputs']['output_cte_w'] = str(cte_w)
+        #prompt.get(str(unique_id))['inputs']['output_cte_h'] = str(cte_h)
+        #prompt.get(str(unique_id))['inputs']['output_target_w'] = str(target_w)
+        #prompt.get(str(unique_id))['inputs']['output_target_h'] = str(target_h)
+        #prompt.get(str(unique_id))['inputs']['output_crop_w'] = str(crop_w)
+        #prompt.get(str(unique_id))['inputs']['output_crop_h'] = str(crop_h)
         return (latent_width, latent_height,
                 cte_w, cte_h,
                 target_w, target_h,
@@ -837,14 +868,14 @@ class PresetRatioSelector:
             cte_w, cte_h = cte_h, cte_w
             target_w, target_h = target_h, target_w
             crop_w, crop_h = crop_h, crop_w
-        prompt.get(str(unique_id))['inputs']['output_latent_w'] = str(latent_width)
-        prompt.get(str(unique_id))['inputs']['output_latent_h'] = str(latent_height)
-        prompt.get(str(unique_id))['inputs']['output_cte_w'] = str(cte_w)
-        prompt.get(str(unique_id))['inputs']['output_cte_h'] = str(cte_h)
-        prompt.get(str(unique_id))['inputs']['output_target_w'] = str(target_w)
-        prompt.get(str(unique_id))['inputs']['output_target_h'] = str(target_h)
-        prompt.get(str(unique_id))['inputs']['output_crop_w'] = str(crop_w)
-        prompt.get(str(unique_id))['inputs']['output_crop_h'] = str(crop_h)
+        #prompt.get(str(unique_id))['inputs']['output_latent_w'] = str(latent_width)
+        #prompt.get(str(unique_id))['inputs']['output_latent_h'] = str(latent_height)
+        #prompt.get(str(unique_id))['inputs']['output_cte_w'] = str(cte_w)
+        #prompt.get(str(unique_id))['inputs']['output_cte_h'] = str(cte_h)
+        #prompt.get(str(unique_id))['inputs']['output_target_w'] = str(target_w)
+        #prompt.get(str(unique_id))['inputs']['output_target_h'] = str(target_h)
+        #prompt.get(str(unique_id))['inputs']['output_crop_w'] = str(crop_w)
+        #prompt.get(str(unique_id))['inputs']['output_crop_h'] = str(crop_h)
         return (latent_width, latent_height,
                 cte_w, cte_h,
                 target_w, target_h,
@@ -1897,14 +1928,13 @@ class PromptWithStyleV3:
                 if '.safetensors' not in lora_filename:
                     lora_filename += '.safetensors'
                 # get the lora multiplier
-                lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
-                print('Loading LoRA: ' + lora_filename + ' with multiplier: ' + str(lora_multiplier))
+                try:
+                    lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
+                except:
+                    lora_multiplier = 1.0
                 # apply the lora to the clip using the LoraLoader.load_lora function
-                # def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
-                # ...
-                # return (model_lora, clip_lora)
                 # apply the lora to the clip
-                model, clip_lora = LoraLoader.load_lora(self, model, clip, lora_filename, lora_multiplier, lora_multiplier)
+                model, clip = load_lora(model, clip, lora_filename, lora_multiplier, lora_multiplier)
                 stripped_text = stripped_text.replace(f'<lora:{lora_filename}:{lora_multiplier}>', '')
                 stripped_text = stripped_text.replace(f'<lora:{lora_filename}>', '')
         return model, clip, stripped_text
@@ -2064,16 +2094,16 @@ class PromptWithStyleV3:
             sdxl_neg_cond = CLIPTextEncodeSDXL.encode(self, clip_base_neg, width, height, 0, 0, target_width, target_height, neg_prompt_, neg_style_)[0]
             refiner_pos_cond = CLIPTextEncodeSDXLRefiner.encode(self, clip_refiner, 6, refiner_width, refiner_height, pos_prompt_)[0]
             refiner_neg_cond = CLIPTextEncodeSDXLRefiner.encode(self, clip_refiner, 2.5, refiner_width, refiner_height, neg_prompt_)[0]
-            prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
-            prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
-            prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
-            prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
-            prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
-            prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
-            prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
-            prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
-            prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
-            prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
+            #prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
+            #prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
+            #prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
+            #prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
+            #prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
+            #prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
+            #prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
+            #prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
+            #prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
+            #prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
             return (base_model, {"samples":latent},
                     sdxl_pos_cond, sdxl_neg_cond,
                     refiner_pos_cond, refiner_neg_cond,
@@ -2127,16 +2157,16 @@ class PromptWithStyleV3:
             sdxl_neg_cond = CLIPTextEncodeSDXL.encode(self, clip_base_neg, width, height, 0, 0, target_width, target_height, neg_prompt_, neg_style_)[0]
             refiner_pos_cond = CLIPTextEncodeSDXLRefiner.encode(self, clip_refiner, 6, refiner_width, refiner_height, pos_prompt_)[0]
             refiner_neg_cond = CLIPTextEncodeSDXLRefiner.encode(self, clip_refiner, 2.5, refiner_width, refiner_height, neg_prompt_)[0]
-            prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
-            prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
-            prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
-            prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
-            prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
-            prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
-            prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
-            prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
-            prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
-            prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
+            #prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
+            #prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
+            #prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
+            #prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
+            #prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
+            #prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
+            #prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
+            #prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
+            #prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
+            #prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
             return (base_model, {"samples":latent},
                     sdxl_pos_cond, sdxl_neg_cond,
                     refiner_pos_cond, refiner_neg_cond,
@@ -2168,16 +2198,16 @@ class PromptWithStyleV3:
                 refiner_neg_cond = ConditioningAverage.addWeighted(self, refiner_neg_conds[i], refiner_neg_cond, 1 / weight)[0]
         # return
         extra_pnginfo['PromptWithStyle'] = prompt_with_style
-        prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
-        prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
-        prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
-        prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
-        prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
-        prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
-        prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
-        prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
-        prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
-        prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
+        #prompt.get(str(unique_id))['inputs']['output_positive_prompt'] = pos_prompt_
+        #prompt.get(str(unique_id))['inputs']['output_negative_prompt'] = neg_prompt_
+        #prompt.get(str(unique_id))['inputs']['output_latent_width'] = width
+        #prompt.get(str(unique_id))['inputs']['output_latent_height'] = height
+        #prompt.get(str(unique_id))['inputs']['output_target_width'] = target_width
+        #prompt.get(str(unique_id))['inputs']['output_target_height'] = target_height
+        #prompt.get(str(unique_id))['inputs']['output_refiner_width'] = refiner_width
+        #prompt.get(str(unique_id))['inputs']['output_refiner_height'] = refiner_height
+        #prompt.get(str(unique_id))['inputs']['output_crop_w'] = 0
+        #prompt.get(str(unique_id))['inputs']['output_crop_h'] = 0
         return (base_model, {"samples":latent},
                 sdxl_pos_cond, sdxl_neg_cond,
                 refiner_pos_cond, refiner_neg_cond,
@@ -2223,12 +2253,14 @@ class LoraSyntaxProcessor:
                 if '.safetensors' not in lora_filename:
                     lora_filename += '.safetensors'
                 # get the lora multiplier
-                lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
-                print('Loading LoRA: ' + lora_filename + ' with multiplier: ' + str(lora_multiplier))
-                model, clip_lora = LoraLoader.load_lora(self, model, clip, lora_filename, lora_multiplier, lora_multiplier)
+                try:
+                    lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
+                except:
+                    lora_multiplier = 1.0    
+                model, clip = load_lora(model, clip, lora_filename, lora_multiplier, lora_multiplier)
         # strip lora syntax from text
         stripped_text = re.sub(lora_re, '', stripped_text)
-        return (model, clip_lora, stripped_text,  text, )
+        return (model, clip, stripped_text,  text, )
 
 class WildcardAndLoraSyntaxProcessor:
     def __init__(self):
@@ -2271,14 +2303,12 @@ class WildcardAndLoraSyntaxProcessor:
                 if '.safetensors' not in lora_filename:
                     lora_filename += '.safetensors'
                 # get the lora multiplier
-                lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
-                print('Loading LoRA: ' + lora_filename + ' with multiplier: ' + str(lora_multiplier))
+                try:
+                    lora_multiplier = float(lora_prompt[1]) if lora_prompt[1] != '' else 1.0
+                except:
+                    lora_multiplier = 1.0
                 # apply the lora to the clip using the LoraLoader.load_lora function
-                # def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
-                # ...
-                # return (model_lora, clip_lora)
-                # apply the lora to the clip
-                model, clip_lora = LoraLoader.load_lora(self, model, clip, lora_filename, lora_multiplier, lora_multiplier)
+                model, clip = load_lora(model, clip, lora_filename, lora_multiplier, lora_multiplier)
         # strip lora syntax from text
         stripped_text = re.sub(lora_re, '', stripped_text)
         return model, clip, stripped_text
@@ -2293,7 +2323,7 @@ class WildcardAndLoraSyntaxProcessor:
         if len(text_) != len(text):
             seed = random.randint(0, 1000000)
         else:
-            seed = 0
+            seed = 1
         # extract and load loras
         model, clip, stripped_text = self.extract_and_load_loras(text_, model, clip)
         # process wildcards again
@@ -2347,7 +2377,7 @@ class StyleConditionerBaseOnly:
     @classmethod
     def INPUT_TYPES(s):
         s.styles, s.pos_style, s.neg_style = read_styles()
-        return {"required": {"style": (s.styles,),"strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
+        return {"required": {"style": (s.styles,),"strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
                              "positive_cond_base": ("CONDITIONING",), "negative_cond_base": ("CONDITIONING",),
                              "base_clip": ("CLIP",),
                              "use_seed": (['true','false'], {'default': 'false'}),
@@ -3818,8 +3848,7 @@ class Text2InputOr3rdOption:
 class CheckpointLoaderSimpleMikey:
     @classmethod
     def INPUT_TYPES(s):
-        return {"required": { "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),
-                             },
+        return {"required": { "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),},
                 "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO", "prompt": "PROMPT"}}
 
     RETURN_TYPES = ("MODEL", "CLIP", "VAE", "STRING", "STRING")
@@ -3831,13 +3860,76 @@ class CheckpointLoaderSimpleMikey:
     def load_checkpoint(self, ckpt_name, output_vae=True, output_clip=True, unique_id=None, extra_pnginfo=None, prompt=None):
         ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
         out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
-        # get hash using python, there is no function in the comfy library
-        hash = get_file_hash(ckpt_path)[:10]
-        # just return the filename, not path
+        #print(ckpt_path)
+        hash = get_file_hash(ckpt_path)
+        ckpt_name = os.path.basename(ckpt_name)
+        #prompt.get(str(unique_id))['inputs']['output_ckpt_hash'] = hash
+        #prompt.get(str(unique_id))['inputs']['output_ckpt_name'] = ckpt_name
+        return out[:3] + (ckpt_name, hash)
+
+class CheckpointHash:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": { "ckpt_name": ("STRING", {"forceInput": True}),},
+                "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO", "prompt": "PROMPT"}}
+    
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("ckpt_hash",)
+    FUNCTION = "get_hash"
+    CATEGORY = "Mikey/Loaders"
+
+    def get_hash(self, ckpt_name, extra_pnginfo, prompt, unique_id):
+        file_list = folder_paths.get_filename_list("checkpoints")
+        matching_file = [s for s in file_list if ckpt_name in s][0]
+        ckpt_path = folder_paths.get_full_path("checkpoints", matching_file)
+        hash = get_file_hash(ckpt_path)
         ckpt_name = os.path.basename(ckpt_name)
         prompt.get(str(unique_id))['inputs']['output_ckpt_hash'] = hash
         prompt.get(str(unique_id))['inputs']['output_ckpt_name'] = ckpt_name
-        return out[:3] + (ckpt_name, hash)
+        return (get_file_hash(ckpt_path),)
+
+class SRStringPromptInput:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {'required': {'input_str': ('STRING', {'forceInput': True}),},
+                "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT"}}
+    
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "add"
+    CATEGORY = "Mikey/Meta"
+
+    def add(self, input_str, unique_id=None, prompt=None):
+        prompt.get(str(unique_id))['inputs']['sr_val'] = input_str
+        return (input_str,)
+
+class SRIntPromptInput:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {'required': {'input_int': ('INT', {'forceInput': True}),},
+                "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO", "prompt": "PROMPT"}}
+    
+    RETURN_TYPES = ("INT",)
+    RETURN_NAMES = ("output_int",)
+    FUNCTION = "add"
+    CATEGORY = "Mikey/Meta"
+
+    def add(self, input_int, extra_pnginfo, unique_id, prompt):
+        prompt.get(str(unique_id))['inputs']['sr_val'] = str(input_int)
+        return (input_int,)
+
+class SRFloatPromptInput:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {'required': {'input_float': ('FLOAT', {'forceInput': True}),},
+                "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT"}}
+    
+    RETURN_TYPES = ("FLOAT",)
+    FUNCTION = "add"
+    CATEGORY = "Mikey/Meta"
+
+    def add(self, input_float, unique_id=None, prompt=None):
+        prompt.get(str(unique_id))['inputs']['sr_val'] = str(input_float)
+        return (input_float,)
 
 class TextPreserve:
     @classmethod
@@ -3854,6 +3946,8 @@ class TextPreserve:
     CATEGORY = 'Mikey/Text'
 
     def process(self, text, result_text, unique_id=None, extra_pnginfo=None, prompt=None):
+        # reset random seed
+        random.seed()
         preserve_text = text
         # search and replace
         text = search_and_replace(text, extra_pnginfo, prompt)
@@ -4673,6 +4767,110 @@ class CinematicLook:
     #    batch_tensor = torch.cat(images, dim=0)
     #    return (batch_tensor, )
 
+class MosaicExpandImage:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'image': ('IMAGE', {'default': None}),
+                             'left': ('INT', {'default': 0, 'min': 0, 'max': 5}),
+                             'top': ('INT', {'default': 0, 'min': 0, 'max': 5}),
+                             'right': ('INT', {'default': 0, 'min': 0, 'max': 5}),
+                             'bottom': ('INT', {'default': 0, 'min': 0, 'max': 5})}}
+
+    RETURN_TYPES = ('IMAGE','MASK',)
+    RETURN_NAMES = ('result_img',)
+    FUNCTION = 'mosaic_expand'
+    CATEGORY = 'Mikey/Image'
+
+    def mosaic_expand(self, image, left, top, right, bottom):
+        img = tensor2pil(image)
+        width, height = img.size
+        width_5th, height_5th = width // 5, height // 5
+
+        def create_mosaic(side_img, num_fifths, vertical=False):
+            block_size = 50
+            num_blocks_wide = side_img.width // block_size
+            num_blocks_high = (num_fifths * height_5th) // block_size if vertical else side_img.height // block_size
+            mosaic_width = block_size * num_blocks_wide
+            mosaic_height = block_size * num_blocks_high
+
+            mosaic_img = Image.new('RGB', (mosaic_width, mosaic_height))
+
+            for i in range(num_blocks_wide):
+                for j in range(num_blocks_high):
+                    # Calculate the average color of each block
+                    section = side_img.crop((i * block_size, j * block_size, (i + 1) * block_size, (j + 1) * block_size))
+                    avg_color = np.array(section).mean(axis=(0, 1)).astype(np.uint8)
+                    # Fill the corresponding block in the mosaic
+                    for x in range(block_size):
+                        for y in range(block_size):
+                            mosaic_x = i * block_size + x
+                            mosaic_y = j * block_size + y
+                            mosaic_img.putpixel((mosaic_x, mosaic_y), tuple(avg_color))
+            return mosaic_img
+
+        self.new_width = width + width_5th * (left + right)
+        self.new_height = height + height_5th * (top + bottom)
+        new_img = Image.new('RGB', (self.new_width, self.new_height))
+
+        # Create and paste mosaic strips
+        if right > 0:
+            right_side = img.crop((width - width_5th * right, 0, width, height))
+            right_mosaic = create_mosaic(right_side, right)
+            right_mosaic = right_mosaic.transpose(Image.FLIP_LEFT_RIGHT)
+            # resize mosaic to match new height
+            right_mosaic = right_mosaic.resize((width_5th * right + 8, self.new_height))
+            new_img.paste(right_mosaic, (width + width_5th * left, 0))
+
+        if left > 0:
+            left_side = img.crop((0, 0, width_5th * left, height))
+            left_mosaic = create_mosaic(left_side, left)
+            left_mosaic = left_mosaic.transpose(Image.FLIP_LEFT_RIGHT)
+            # resize mosaic to match new height
+            left_mosaic = left_mosaic.resize((width_5th * left + 8, self.new_height))
+            new_img.paste(left_mosaic, (0, 0))
+
+        if top > 0:
+            top_side = img.crop((0, 0, width, height_5th * top))
+            top_mosaic = create_mosaic(top_side, top, vertical=True)
+            top_mosaic = top_mosaic.transpose(Image.FLIP_TOP_BOTTOM)
+            top_mosaic = top_mosaic.resize((width + 32, height_5th * top + 8))
+            new_img.paste(top_mosaic, (width_5th * left, 0))
+
+        if bottom > 0:
+            bottom_side = img.crop((0, height - height_5th * bottom, width, height))
+            bottom_mosaic = create_mosaic(bottom_side, bottom, vertical=True)
+            bottom_mosaic = bottom_mosaic.transpose(Image.FLIP_TOP_BOTTOM)
+            bottom_mosaic = bottom_mosaic.resize((width + 32, height_5th * bottom + 8))
+            new_img.paste(bottom_mosaic, (width_5th * left, height + height_5th * top))
+
+        # Paste original image
+        new_img.paste(img, (width_5th * left, height_5th * top))
+        new_img = pil2tensor(new_img)
+
+        # create black and white mask image where white is the original image
+        mask = Image.new('RGB', (self.new_width, self.new_height), (0, 0, 0))
+        white = Image.new('RGB', (width, height), (255, 255, 255))
+        # for each side that has been expanded, shrink that side of the white box by 8 pixels
+        if right > 0:
+            white = white.crop((0, 0, width - 64, height))
+        if left > 0:
+            white = white.crop((64, 0, width, height))
+        if top > 0:
+            white = white.crop((0, 64, width, height))
+        if bottom > 0:
+            white = white.crop((0, 0, width, height - 64))
+        paste_x = width_5th * left + 64
+        if left > 0:
+            paste_x += 64
+        paste_y = height_5th * top
+        if top > 0:
+            paste_y += 64
+        mask.paste(white, (paste_x, paste_y))
+        mask = np.array(mask.getchannel('R')).astype(np.float32) / 255.0
+        mask = 1. - torch.from_numpy(mask)
+        mask = mask.unsqueeze(0)
+        return (new_img, mask)
+
 NODE_CLASS_MAPPINGS = {
     'Wildcard Processor': WildcardProcessor,
     'Empty Latent Ratio Select SDXL': EmptyLatentRatioSelector,
@@ -4724,6 +4922,10 @@ NODE_CLASS_MAPPINGS = {
     'TextCombinations3': TextCombinations3,
     'Text2InputOr3rdOption': Text2InputOr3rdOption,
     'Checkpoint Loader Simple Mikey': CheckpointLoaderSimpleMikey,
+    'CheckpointHash': CheckpointHash,
+    'SRStringPromptInput': SRStringPromptInput,
+    'SRIntPromptInput': SRIntPromptInput,
+    'SRFloatPromptInput': SRFloatPromptInput,
     'TextPreserve': TextPreserve,
     'TextConcat': TextConcat,
     'OobaPrompt': OobaPrompt,
@@ -4731,7 +4933,8 @@ NODE_CLASS_MAPPINGS = {
     'LMStudioPrompt': LMStudioPrompt,
     'EvalFloats': EvalFloats,
     'ImageOverlay': ImageOverlay,
-    'CinematicLook': CinematicLook
+    'CinematicLook': CinematicLook,
+    'MosaicExpandImage': MosaicExpandImage
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -4785,6 +4988,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'TextCombinations3': 'Text Combinations 3 (Mikey)',
     'Text2InputOr3rdOption': 'Text 2 Inputs Or 3rd Option Instead (Mikey)',
     'Checkpoint Loader Simple Mikey': 'Checkpoint Loader Simple (Mikey)',
+    'CheckpointHash': 'Checkpoint Hash (Mikey)',
+    'SRStringPromptInput': 'SR String Prompt Input (Mikey)',
+    'SRIntPromptInput': 'SR Int Prompt Input (Mikey)',
+    'SRFloatPromptInput': 'SR Float Prompt Input (Mikey)',
     'TextPreserve': 'Text Preserve (Mikey)',
     'TextConcat': 'Text Concat (Mikey)',
     'OobaPrompt': 'OobaPrompt (Mikey)',
@@ -4792,5 +4999,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'LMStudioPrompt': 'LM Studio Prompt (Mikey)',
     'EvalFloats': 'Eval Floats (Mikey)',
     'ImageOverlay': 'Image Overlay (Mikey)',
-    'CinematicLook': 'Cinematic Look (Mikey)'
+    'CinematicLook': 'Cinematic Look (Mikey)',
+    'MosaicExpandImage': 'Mosaic Expand Image (Mikey)'
 }
