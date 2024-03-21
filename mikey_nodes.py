@@ -40,7 +40,7 @@ from nodes_upscale_model import UpscaleModelLoader, ImageUpscaleWithModel
 from comfy.model_management import soft_empty_cache, free_memory, get_torch_device, current_loaded_models, load_model_gpu
 from nodes import LoraLoader, ConditioningAverage, common_ksampler, ImageScale, ImageScaleBy, VAEEncode, VAEDecode
 import comfy.utils
-from comfy_extras.chainner_models import model_loading
+from spandrel import ModelLoader, ImageModelDescriptor
 from comfy import model_management, model_base
 
 def calculate_file_hash(file_path):
