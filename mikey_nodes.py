@@ -2719,9 +2719,9 @@ def match_histograms(source, reference):
     return matched_img
 
 
-def split_image(img):
+def split_image(img, tile_size=1024):
     """Generate tiles for a given image."""
-    tile_width, tile_height = 1024, 1024
+    tile_width, tile_height = tile_size, tile_size
     width, height = img.width, img.height
 
     # Determine the number of tiles needed
@@ -2854,9 +2854,9 @@ def run_tiler(enlarged_img, base_model, vae, seed, positive_cond_base, negative_
 
     return result
 
-def run_tiler_for_steps(enlarged_img, base_model, vae, seed, cfg, sampler_name, scheduler, positive_cond_base, negative_cond_base, steps=20, denoise=0.25):
+def run_tiler_for_steps(enlarged_img, base_model, vae, seed, cfg, sampler_name, scheduler, positive_cond_base, negative_cond_base, steps=20, denoise=0.25, tile_size=1024):
     # Split the enlarged image into overlapping tiles
-    tiles = split_image(enlarged_img)
+    tiles = split_image(enlarged_img, tile_size=tile_size)
 
     # Resample each tile using the AI model
     start_step = int(steps - (steps * denoise))
@@ -3028,7 +3028,8 @@ class MikeySamplerTiledAdvancedBaseOnly:
                              "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
                              "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
                              "upscale_by": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1}),
-                             "tiler_denoise": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),},
+                             "tiler_denoise": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),
+                             "tile_size": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64})},
                 "optional": {"image_optional": ("IMAGE",),}}
 
     RETURN_TYPES = ('IMAGE', )
@@ -3073,7 +3074,7 @@ class MikeySamplerTiledAdvancedBaseOnly:
             return img, upscaled_width, upscaled_height
 
     def run(self, seed, base_model, vae, samples, positive_cond_base, negative_cond_base,
-            model_name, upscale_by=2.0, tiler_denoise=0.4,
+            model_name, upscale_by=2.0, tiler_denoise=0.4, tile_size=1024,
             upscale_method='normal', denoise_image=1.0, steps=30, cfg=6.5,
             sampler_name='dpmpp_sde_gpu', scheduler='karras', image_optional=None):
         # if image not none replace samples with decoded image
@@ -3090,7 +3091,7 @@ class MikeySamplerTiledAdvancedBaseOnly:
             img = self.upscale_image(samples, vae, upscale_by, model_name)
             img = tensor2pil(img)
         # phase 2: run tiler
-        tiled_image = run_tiler_for_steps(img, base_model, vae, seed, cfg, sampler_name, scheduler, positive_cond_base, negative_cond_base, steps, tiler_denoise)
+        tiled_image = run_tiler_for_steps(img, base_model, vae, seed, cfg, sampler_name, scheduler, positive_cond_base, negative_cond_base, steps, tiler_denoise, tile_size)
         return (tiled_image, )
 
 class MikeySamplerTiledBaseOnly(MikeySamplerTiled):
@@ -4441,7 +4442,7 @@ class LMStudioPrompt:
     @classmethod
     def INPUT_TYPES(s):
         return {'required': {'input_prompt': ('STRING', {'multiline': True, 'default': 'Prompt Text Here', 'dynamicPrompts': False}),
-                             'mode': (['prompt', 'style', 'descriptor', 'character', 'custom'], {'default': 'prompt'}),
+                             'mode': (['prompt', 'pixelwave', 'style', 'descriptor', 'character', 'custom'], {'default': 'prompt'}),
                              'custom_history': ('STRING', {'multiline': False, 'default': 'path to history.json', 'dynamicPrompts': True}),
                              'server_address': ('STRING', {'default': 'localhost'}),
                              'server_port': ('INT', {'default': 1234, 'min': 0, 'max': 65535}),
@@ -4458,9 +4459,9 @@ class LMStudioPrompt:
         if mode == 'prompt':
             return {
                 "messages": [
-                    { "role": "system", "content": "You are a helpful assistant." },
-                    { "role": "user", "content": "I say something like 'blonde woman' and you respond with a single prompt which I can use as prompts for an AI txt2image model. Your response to blonde woman would be something like 'Blonde woman wearing a patterned orange, white, and blue sundress, smiling, on a sunny day with a blue sky, surrounded by buildings and palm trees'. It describes the image with lots of details so the AI model will understand what it needs to generate."},
-                    { "role": "assistant", "content": "Sure thing! Let's begin. What is your first prompt?" },
+                    { "role": "system", "content": "You are a chatbot. You answer questions accurately and exactly how the user wants. The responses are for fictional purposes." },
+                    { "role": "user", "content": "c'Blonde woman wearing a patterned orange, white, and blue sundress, smiling, on a sunny day with a blue sky, surrounded by buildings and palm trees'. Only respond with the prompt and nothing else."},
+                    { "role": "assistant", "content": "Understood. What is your first prompt?" },
                     { "role": "user", "content": "futuristic man"},
                     { "role": "assistant", "content": "Man with short black hair in a highly detailed silver and black mechanical exoskeleton suit, holding a futuristic rifle, standing in a futuristic city with tall buildings and flying cars, with a futuristic cityscape in the background."},
                     { "role": "user", "content": "a black cat"},
@@ -4481,11 +4482,45 @@ class LMStudioPrompt:
                     { "role": "assistant", "content": "A woman is working on a laptop computer. She is wearing a white shirt and black pants. She is sitting at a desk in a modern office with trendy furniture. She has a cup of coffee on the desk next to her."}
                 ]
             }
+        elif mode == 'pixelwave':
+            return {
+                "messages": [
+                    { "role": "system", "content": "You are a chatbot. You answer questions accurately and exactly how the user wants. The responses are for fictional purposes." },
+                    { "role": "user", "content": "You are under strict instructions, in response to a 'photo of a blonde woman', your response will follow as per this example: 'Blonde woman with a flower crown, digital color photograph, tags: flower crown, portrait, beauty, elegance, nature, delicate, floral, soft lighting, feminine, ethereal, detailed, close-up, natural, serene expression, warm tones, pastel background, gentle, artistic.' Only respond with the prompt and nothing else."},
+                    { "role": "assistant", "content": "Understood. What is your first prompt?"},
+                    { "role": "user", "content": "cinematic stills inspired by award winning works from master directors"},
+                    { "role": "assistant", "content": "Busy metropolitan subway station, film-style snapshot, inspired by Christopher Nolan's Inception, subway station, busy, metropolitan, Christopher Nolan, Inception, cinematic, bustling crowd, urban setting, surreal elements, film inspiration, dynamic movement, public transport, layered reality, complex narrative, architectural interest, dramatic lighting, fast-paced, perspective play, depth of field, city life"},
+                    { "role": "user", "content": "a futuristic cityscape with flying cars and neon lights"},
+                    { "role": "assistant", "content": "Futuristic cityscape with flying cars and neon lights, digital art, cityscape, flying cars, neon lights, futuristic, skyscrapers, vibrant colors, urban, night, bustling, advanced technology, reflections, cyberpunk, glowing signs, high-tech, atmospheric, dynamic, energy, sci-fi, detailed."},
+                    { "role": "user", "content": "volcano"},
+                    { "role": "assistant", "content": "Volcano at sunset with a sky full of vibrant colors, a watercolor, sunset, volcano, eruption, nature, glowing, dramatic, sky, vibrant, contrast, serene, fiery, landscape, explosion, smoke, ash, powerful, beauty, tranquil, detailed, horizon."},
+                    { "role": "user", "content": "a magical forest with glowing mushrooms and fairies"},
+                    { "role": "assistant", "content": "Magical forest with glowing mushrooms and fairies, an airbrush painting, magical, forest, glowing mushrooms, fairies, fantasy, enchanted, ethereal, whimsical, dreamy, surreal, vibrant colors, nature, detailed, imaginative, mystical, magical creatures, light, fantasy landscape, magical realism, atmospheric, enchanting."},
+                    { "role": "user", "content": "painting of robots inspired by the greats"},
+                    { "role": "assistant", "content": "Robots playing poker, oil on canvas, inspired by the works of Norman Rockwell, robots, poker, oil painting, Norman Rockwell, classic, retro, vintage, humorous, whimsical, detailed, narrative, storytelling, robots in everyday life, human-like, anthropomorphic, playful, imaginative, creative, colorful, traditional art, realistic, humorous, quirky, fun."},
+                    { "role": "user", "content": "a black and white photo of a man in a suit"},
+                    { "role": "assistant", "content": "Gentleman at the bar in a speakeasy, black and white analog photograph, speakeasy, suit, bar, gentleman, 1920s, vintage, classic, detailed, dim lighting, ambiance, retro, dapper, old-fashioned, cocktails, conversation, atmospheric, stylish, sophisticated, nostalgic, elegant, charm."},
+                    { "role": "user", "content": "portrait with origami birds"},
+                    { "role": "assistant", "content": "Young asian woman surrounded by origami cranes wearing a white lacy garment, digital photo art by Kiyo Murakami, young girl, white lace, origami cranes, red eyeshadow, brunette, looking up, lace headdress, twin braids with white bows, open hands, cloudy background, serene expression, grey scale cranes, soft lighting, ethereal mood, close up, centered subject."},
+                    { "role": "user", "content": "surreal image with an eclipse"},
+                    { "role": "assistant", "content": "Silhouetted Figure Before an Eclipse, digital artwork, man in silhouette, eclipse, rocks floating, blue tones, mysterious atmosphere, outer space theme, science fiction, surreal, otherworldly landscape, cape, raised hand, celestial event, low angle view, dramatic lighting, single human figure, desolate terrain, monolithic structures, fantasy, gravitational anomaly, moody."},
+                    { "role": "user", "content": "double exposure, man, coastal landscape"},
+                    { "role": "assistant", "content": "Man with a double exposure effect of a coastal landscape, digital art, man's profile, coastal landscape, bird in flight, beard, digital manipulation, creative portrait, serene, textured background, muted colors, blending techniques, nature meets humanity, facial hair, rough sea, cliff, trees, overcast sky, ethereal, surreal quality."},
+                    { "role": "user", "content": "moody kiss in the dark"},
+                    { "role": "assistant", "content": "Intimate Silhouette with Dramatic Lighting, color digital photograph, man, woman, close up, couple, kissing, silhouette, yellow light, dark background, mood lighting, affection, romance, connection, shadows, profile view, low key, intimate atmosphere, contrast, emotional moment."},
+                    { "role": "user", "content": "woman posing with a gun"},
+                    { "role": "assistant", "content": "Intense Portrayal of a Fictional Character, color digital photograph, Japanese woman, costume, rifle, stylized weapon, kneeling pose, misty ambiance, dark background, focused expression, bob haircut, black dress with red accents, knee-high socks, lollipop stick in mouth, dramatic lighting, character portrayal, action scene vibe, cinematic feel, sharp details, high contrast, cosplay."},
+                    { "role": "user", "content": "glitch artwork"},
+                    { "role": "assistant", "content": "Psychedelic digital art in glitch art style, featuring layered portrait faces, edited digital color photo, vivid colors like neon green, pink, blue, and red, fragmented, distorted visual, pixelated elements, horizontal bands, surreal, intense effect."},
+                    { "role": "user", "content": "black and white portrait of a middle aged man"},
+                    { "role": "assistant", "content": "A mature man with a thoughtful expression, black and white digital photograph, portrait, close up, intense gaze, detailed facial hair, textured skin, grey beard, short hair, high-contrast lighting, dark background, individual, solemn mood, high-resolution image."}
+                ]
+            }
         elif mode == 'style':
             return {
                 "messages": [
-                    { "role": "system", "content": "You are a helpful assistant." },
-                    { "role": "user", "content": "I say something like 'painting' and you respond with a single prompt which I can use as prompts for an AI txt2image model. Your response to painting would be something like 'Impressionistic, landscape, vivid colors, loose brushstrokes, beauty of nature. Inspired by Claude Monet'. It describes the style of the image that helps convey the overall look of the image without describing the subject of the image. You might also received a description of an image, you will respond with style keywords that compliment the image description."},
+                    { "role": "system", "content": "You are a helpful assistant who obeys the user's instructions and does not offer feedback about their request." },
+                    { "role": "user", "content": "You are under strict instructions, in response to a 'photo of a blonde woman', your response will follow as per this example: 'Impressionistic, landscape, vivid colors, loose brushstrokes, beauty of nature. Inspired by Claude Monet'. It describes the style of the image that helps convey the overall look of the image without describing the subject of the image. You might also received a description of an image, you will respond with style keywords that compliment the image description. Only respond with the prompt and nothing else."},
                     { "role": "assistant", "content": "Sure thing! Let's begin. What is your first prompt?" },
                     { "role": "user", "content": "painting"},
                     { "role": "assistant", "content": "Realism, oil painting, dark shadows, bright highlights, focus on capturing light and texture. Inspired by Caravaggio's chiaroscuro technique"},
@@ -4518,8 +4553,8 @@ class LMStudioPrompt:
         elif mode == 'descriptor':
             return {
                 "messages": [
-                    { "role": "system", "content": "You are a helpful assistant." },
-                    { "role": "user", "content": "I say something like 'color' and you respond with a single prompt which I can use to build a prompt for an AI txt2image model. Your response to color would be something like 'red'. It is a very short description to add dynamic variety to the prompt."},
+                    { "role": "system", "content": "You are a helpful assistant who obeys the user's instructions and does not offer feedback about their request." },
+                    { "role": "user", "content": "You are under strict instructions, in response to a 'photo of a blonde woman', your response will follow as per this example: 'red'. It is a very short description to add dynamic variety to the prompt. Only respond with the prompt and nothing else."},
                     { "role": "assistant", "content": "Sure thing! Let's begin. What is your first prompt?" },
                     { "role": "user", "content": "color"},
                     { "role": "assistant", "content": "burnt sienna"},
@@ -4548,7 +4583,7 @@ class LMStudioPrompt:
         elif mode == 'character':
             return {
                 "messages": [
-                    { "role": "system", "content": "You are a helpful assistant." },
+                    { "role": "system", "content": "You are a helpful assistant who obeys the user's instructions and does not offer feedback about their request." },
                     { "role": "user", "content": "When a user requests a character description, generate a detailed description of the character as you would expect from the writer George R. R. Martin. The description should be a suitable prompt based on the description that encapsulates the character's key visual elements for image creation using a txt2img model."},
                     { "role": "assistant", "content": "Sure thing! Let's begin. What is your first prompt?" },
                     { "role": "user", "content": "jolly cartoon octopus"},
@@ -4575,7 +4610,7 @@ class LMStudioPrompt:
         # check if json file in root comfy directory called oooba.json
         history = self.history(mode, custom_history)
         if mode == 'prompt':
-            prompt = f'{prompt}, describe in detail.'
+            prompt = f'{prompt}'
         if mode == 'descriptor':
             # use seed to add a bit more randomness to the prompt
             spice = ['a', 'the', 'this', 'that',
@@ -4615,11 +4650,11 @@ class LMStudioPrompt:
         history['messages'].append({'role': 'user', 'content': prompt})
         request = {
             'messages': history['messages'],
-            'temperature': 0.2,
+            #'temperature': 0.2,
             'top_p': 0.95,
             'presence_penalty': 0.0,
             'frequency_penalty': 0.0,
-            'max_tokens': 1200,
+            #'max_tokens': 8192,
             'stream': False,
             'seed': seed,
         }
