@@ -57,6 +57,8 @@
 #pdm.lock
 #poetry.lock
 *$py.class
+**/*.py[cod]
+**/__pycache__/
 *.ckpt
 *.cover
 *.egg
@@ -107,6 +109,7 @@
 .spyproject
 .tox/
 .venv
+.vs
 .webassets-cache
 /.vs
 /input/
@@ -158,3 +161,4 @@ var/
 venv.bak/
 venv/
 wheels/
+workspace*/
