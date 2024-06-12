@@ -14,6 +14,7 @@ import sys
 from textwrap import wrap
 
 import html
+import latent_preview
 import requests
 import numpy as np
 from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops, ImageFont
@@ -40,7 +41,12 @@ from nodes_upscale_model import UpscaleModelLoader, ImageUpscaleWithModel
 from comfy.model_management import soft_empty_cache, free_memory, get_torch_device, current_loaded_models, load_model_gpu
 from nodes import LoraLoader, ConditioningAverage, common_ksampler, ImageScale, ImageScaleBy, VAEEncode, VAEDecode
 import comfy.utils
+<<<<<<< HEAD
 from spandrel import ModelLoader, ImageModelDescriptor
+=======
+from comfy_extras.chainner_models import model_loading
+from comfy_extras.nodes_custom_sampler import Noise_EmptyNoise, Noise_RandomNoise
+>>>>>>> upstream/main
 from comfy import model_management, model_base
 
 def calculate_file_hash(file_path):
@@ -2570,10 +2576,10 @@ class MikeySamplerBaseOnly:
         # common_ksampler(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, denoise=1.0,
         # disable_noise=False, start_step=None, last_step=None, force_full_denoise=False)
         # step 1 run base model low cfg
-        sample1 = common_ksampler(base_model, seed, 30, 5, 'dpmpp_3m_sde_gpu', 'exponential', positive_cond_base, negative_cond_base, samples,
+        sample1 = common_ksampler(base_model, seed, 30, 4, 'dpmpp_2m_sde_gpu', 'karras', positive_cond_base, negative_cond_base, samples,
                                   start_step=0, last_step=14, force_full_denoise=False)[0]
         # step 2 run base model high cfg
-        sample2 = common_ksampler(base_model, seed+1, 31 + smooth_step, 9.5, 'dpmpp_3m_sde_gpu', 'exponential', positive_cond_base, negative_cond_base, sample1,
+        sample2 = common_ksampler(base_model, seed+1, 31 + smooth_step, 6, 'dpmpp_2m_sde_gpu', 'karras', positive_cond_base, negative_cond_base, sample1,
                                   disable_noise=True, start_step=15, force_full_denoise=True)
         if upscale_by == 0:
             return sample2
@@ -2594,7 +2600,7 @@ class MikeySamplerBaseOnly:
         # encode image
         latent = vaeencoder.encode(vae, img)[0]
         # step 3 run base model
-        out = common_ksampler(base_model, seed, 31, 9.5, 'dpmpp_3m_sde_gpu', 'exponential', positive_cond_base, negative_cond_base, latent,
+        out = common_ksampler(base_model, seed, 31, 6, 'dpmpp_2m_sde_gpu', 'karras', positive_cond_base, negative_cond_base, latent,
                                 start_step=start_step, force_full_denoise=True)
         return out
 
@@ -3149,31 +3155,180 @@ class MikeySamplerTiledBaseOnly(MikeySamplerTiled):
         #final_image = pil2tensor(tiled_image)
         return (tiled_image,)
 
-"""
-import cv2
+def split_latent_tensor(latent_tensor, tile_size=1024, scale_factor=8):
+    """Generate tiles for a given latent tensor, considering the scaling factor."""
+    latent_tile_size = tile_size // scale_factor  # Adjust tile size for latent space
+    _, _, height, width = latent_tensor.shape
 
-# Load a pre-trained face detection model
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    # Determine the number of tiles needed
+    num_tiles_x = ceil(width / latent_tile_size)
+    num_tiles_y = ceil(height / latent_tile_size)
 
-# Read the image where you want to detect faces
-image_path = 'path_to_your_image.jpg'  # Replace with your image path
-image = cv2.imread(image_path)
+    # If width or height is an exact multiple of the tile size, add an additional tile for overlap
+    if width % latent_tile_size == 0:
+        num_tiles_x += 1
+    if height % latent_tile_size == 0:
+        num_tiles_y += 1
 
-# Convert the image to grayscale (needed for face detection)
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Calculate the overlap
+    overlap_x = (num_tiles_x * latent_tile_size - width) / (num_tiles_x - 1)
+    overlap_y = (num_tiles_y * latent_tile_size - height) / (num_tiles_y - 1)
+    if overlap_x < 32:
+        num_tiles_x += 1
+        overlap_x = (num_tiles_x * latent_tile_size - width) / (num_tiles_x - 1)
+    if overlap_y < 32:
+        num_tiles_y += 1
+        overlap_y = (num_tiles_y * latent_tile_size - height) / (num_tiles_y - 1)
 
-# Detect faces in the image
-faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    tiles = []
 
-# Draw rectangles around each face
-for (x, y, w, h) in faces:
-    cv2.rectangle(image, (x, y), (x+w, y+h), (255, 0, 0), 2)
+    for i in range(num_tiles_y):
+        for j in range(num_tiles_x):
+            x_start = j * latent_tile_size - j * overlap_x
+            y_start = i * latent_tile_size - i * overlap_y
 
-# Display the output
-cv2.imshow('Face Detection', image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
-"""
+            # Correct for potential float precision issues
+            x_start = round(x_start)
+            y_start = round(y_start)
+
+            # Crop the tile from the latent tensor
+            tile_tensor = latent_tensor[:, :, y_start:y_start + latent_tile_size, x_start:x_start + latent_tile_size]
+            tiles.append(((x_start, y_start, x_start + latent_tile_size, y_start + latent_tile_size), tile_tensor))
+
+    return tiles
+
+def stitch_latent_tensors(original_size, tiles, scale_factor=8):
+    """Stitch tiles together to create the final upscaled latent tensor with overlaps."""
+    result = torch.zeros(original_size)
+
+    # We assume tiles come in the format [(coordinates, tile), ...]
+    sorted_tiles = sorted(tiles, key=lambda x: (x[0][1], x[0][0]))  # Sort by upper then left
+
+    # Variables to keep track of the current row's starting point
+    current_row_upper = None
+
+    for (left, upper, right, lower), tile in sorted_tiles:
+
+        # Check if we're starting a new row
+        if current_row_upper != upper:
+            current_row_upper = upper
+            first_tile_in_row = True
+        else:
+            first_tile_in_row = False
+
+        tile_width = right - left
+        tile_height = lower - upper
+        feather = tile_width // 8  # Assuming feather size is consistent with the example
+
+        mask = torch.ones(tile.shape[0], tile.shape[1], tile.shape[2], tile.shape[3])
+
+        if not first_tile_in_row:  # Left feathering for tiles other than the first in the row
+            for t in range(feather):
+                mask[:, :, :, t:t+1] *= (1.0 / feather) * (t + 1)
+
+        if upper != 0:  # Top feathering for all tiles except the first row
+            for t in range(feather):
+                mask[:, :, t:t+1, :] *= (1.0 / feather) * (t + 1)
+
+        # Apply the feathering mask
+        combined_area = tile * mask + result[:, :, upper:lower, left:right] * (1.0 - mask)
+        result[:, :, upper:lower, left:right] = combined_area
+
+    return result
+
+class MikeyLatentTileSampler:
+    # receives a latent that is larger than the tile size and resamples it
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {"base_model": ("MODEL",), "samples": ("LATENT",),
+                             "positive": ("CONDITIONING",), "negative": ("CONDITIONING",),
+                             "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                             "denoise": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),
+                             "steps": ("INT", {"default": 30, "min": 1, "max": 1000}),
+                             "cfg": ("FLOAT", {"default": 5, "min": 0.0, "max": 1000.0, "step": 0.1}),
+                             "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
+                             "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
+                             "tile_size": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64})}}
+
+    RETURN_TYPES = ('LATENT',)
+    RETURN_NAMES = ('samples',)
+    FUNCTION = 'sample'
+    CATEGORY = 'Mikey/Sampling'
+
+    def sample(self, seed, base_model, samples, positive, negative,
+            denoise=0.25, steps=30, cfg=5, sampler_name='dpmpp_2m_sde_gpu', scheduler='karras',
+            tile_size=1024):
+        latent = samples.copy()
+        # split latent into tiles
+        latent_samples = latent["samples"]
+        tiles = split_latent_tensor(latent_samples, tile_size)
+        # resample each tile using ksampler
+        start_step = int(steps - (steps * denoise))
+        resampled_tiles = [(coords, common_ksampler(base_model, seed, steps, cfg, sampler_name, scheduler,
+                                                    positive, negative, {"samples": tile}, start_step=start_step)[0]["samples"]) for coords, tile in tiles]
+        # stitch the tiles to get the final upscaled latent tensor
+        latent["samples"] = stitch_latent_tensors(latent_samples.shape, resampled_tiles)
+        return (latent,)
+
+class MikeyLatentTileSamplerCustom:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required":
+                    {"model": ("MODEL",),
+                    "add_noise": ("BOOLEAN", {"default": True}),
+                    "noise_seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                    "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step":0.1, "round": 0.01}),
+                    "positive": ("CONDITIONING", ),
+                    "negative": ("CONDITIONING", ),
+                    "sampler": ("SAMPLER", ),
+                    "sigmas": ("SIGMAS", ),
+                    "latent_image": ("LATENT", ),
+                    "tile_size": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+                     }
+                }
+
+    RETURN_TYPES = ("LATENT", )
+    RETURN_NAMES = ("samples", )
+    FUNCTION = "tile_sample"
+    CATEGORY = "Mikey/Sampling"
+
+    def sample(self, model, add_noise, noise_seed, cfg, positive, negative, sampler, sigmas, latent_image):
+        latent = latent_image
+        latent_image = latent["samples"]
+        if not add_noise:
+            noise = Noise_EmptyNoise().generate_noise(latent)
+        else:
+            noise = Noise_RandomNoise(noise_seed).generate_noise(latent)
+
+        noise_mask = None
+        if "noise_mask" in latent:
+            noise_mask = latent["noise_mask"]
+
+        x0_output = {}
+        callback = latent_preview.prepare_callback(model, sigmas.shape[-1] - 1, x0_output)
+
+        disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
+        samples = comfy.sample.sample_custom(model, noise, cfg, sampler, sigmas, positive, negative, latent_image, noise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar, seed=noise_seed)
+
+        out = latent.copy()
+        out["samples"] = samples
+        if "x0" in x0_output:
+            out_denoised = latent.copy()
+            out_denoised["samples"] = model.model.process_latent_out(x0_output["x0"].cpu())
+        else:
+            out_denoised = out
+        return out_denoised
+
+    def tile_sample(self, model, add_noise, noise_seed, cfg, positive, negative, sampler, sigmas, latent_image, tile_size):
+        latent = latent_image.copy()
+        # split image into tiles
+        latent_samples = latent["samples"]
+        tiles = split_latent_tensor(latent_samples, tile_size)
+        # resample each tile using self.sample
+        resampled_tiles = [(coords, self.sample(model, add_noise, noise_seed, cfg, positive, negative, sampler, sigmas, {"samples": tile})["samples"]) for coords, tile in tiles]
+        # stitch the tiles to get the final upscaled latent tensor
+        latent["samples"] = stitch_latent_tensors(latent_samples.shape, resampled_tiles)
+        return (latent, )
 
 class FaceFixerOpenCV:
     @classmethod
@@ -4983,6 +5138,8 @@ NODE_CLASS_MAPPINGS = {
     'Mikey Sampler Base Only Advanced': MikeySamplerBaseOnlyAdvanced,
     'Mikey Sampler Tiled': MikeySamplerTiled,
     'Mikey Sampler Tiled Base Only': MikeySamplerTiledBaseOnly,
+    'MikeyLatentTileSampler': MikeyLatentTileSampler,
+    'MikeyLatentTileSamplerCustom': MikeyLatentTileSamplerCustom,
     'FaceFixerOpenCV': FaceFixerOpenCV,
     'AddMetaData': AddMetaData,
     'SaveMetaData': SaveMetaData,
@@ -5050,6 +5207,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'MikeySamplerTiledAdvanced': 'Mikey Sampler Tiled Advanced',
     'MikeySamplerTiledAdvancedBaseOnly': 'Mikey Sampler Tiled Advanced Base Only',
     'Mikey Sampler Tiled Base Only': 'Mikey Sampler Tiled Base Only',
+    'MikeyLatentTileSampler': 'Latent Tile Sampler (Mikey)',
+    'MikeyLatentTileSamplerCustom': 'Latent Tile Sampler Custom (Mikey)',
     'FaceFixerOpenCV': 'Face Fixer OpenCV (Mikey)',
     'AddMetaData': 'AddMetaData (Mikey)',
     'SaveMetaData': 'SaveMetaData (Mikey)',
