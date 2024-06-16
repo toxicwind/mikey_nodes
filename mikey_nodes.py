@@ -5097,6 +5097,121 @@ class GetSubdirectories:
             raise Exception(f'{directory} is not a valid directory')
         return (subdirectories,)
 
+class TextPadderMikey:
+    # Pad text to a fixed length with a specified padding character
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'text': ('STRING', {'default': 'text to pad'}),
+                             'length': ('INT', {'default': 512, 'min': 1, 'max': 1000}),
+                             'technique': (['pad','repeat'], {'default': 'pad'}),
+                             'padding_character': ('STRING', {'default': ','})}}
+
+    RETURN_TYPES = ('STRING',)
+    RETURN_NAMES = ('padded_text',)
+    FUNCTION = 'pad_text'
+    CATEGORY = 'Mikey/Text'
+
+    def pad_text(self, text, length, technique, padding_character):
+        if len(text) >= length:
+            return (text,)
+        if technique == 'pad':
+            padded_text = text.ljust(length, padding_character)
+        elif technique == 'repeat':
+            # repeat but don't cut off the text
+            padded_text = text * (length // len(text))
+            # fill the rest with the padding character
+            padded_text = padded_text.ljust(length, padding_character)
+        return (padded_text,)
+
+class SD3TextConditioningWithOptionsOnePrompt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'positive_prompt': ('STRING', {'default': 'positive prompt', 'multiline': True}),
+                             'negative_prompt': ('STRING', {'default': 'negative prompt', 'multiline': True}),
+                             'clip': ('CLIP',),
+                             'option_positive_clip_l': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'option_positive_clip_g': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'option_positive_t5xxl': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'option_negative_clip_l': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'option_negative_clip_g': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'option_negative_t5xxl': (['Unmodified','Padded','Empty'], {'default': 'Unmodified'}),
+                             'padding_character': ('STRING', {'default': ','})}}
+
+    RETURN_TYPES = ('CONDITIONING','CONDITIONING',)
+    RETURN_NAMES = ('positive_conditioning','negative_conditioning')
+    FUNCTION = 'process'
+    CATEGORY = 'Mikey/SD3/Conditioning'
+
+    def process(self, positive_prompt, negative_prompt, clip, option_positive_clip_l, option_positive_clip_g, option_positive_t5xxl, option_negative_clip_l, option_negative_clip_g, option_negative_t5xxl, padding_character):
+        positive_tokens = clip.tokenize(positive_prompt)
+        if len(positive_prompt) == 0 or option_positive_clip_g == 'Empty':
+            positive_tokens['g'] = []
+        if len(positive_tokens['g']) < 77 and option_positive_clip_l == 'Padded':
+            padded_g_string = positive_prompt + padding_character * (77 - len(positive_tokens['g']))
+            positive_tokens['g'] = clip.tokenize(padded_g_string)['g']
+
+        if len(positive_prompt) == 0 or option_positive_clip_l == 'Empty':
+            positive_tokens['l'] = []
+        elif len(positive_tokens['l']) < 77 and option_positive_clip_l == 'Padded':
+            padded_l_string = positive_prompt + padding_character * (77 - len(positive_tokens['l']))
+            positive_tokens['l'] = clip.tokenize(padded_l_string)['l']
+        else:
+            positive_tokens['l'] = clip.tokenize(positive_prompt)['l']
+
+        if len(positive_prompt) == 0 or option_positive_t5xxl == 'Empty':
+            positive_tokens['t5xxl'] = []
+        elif len(positive_tokens['t5xxl']) < 512 and option_positive_t5xxl == 'Padded':
+            padded_t5xxl_string = positive_prompt + padding_character * (512 - len(positive_tokens['t5xxl']))
+            positive_tokens['t5xxl'] = clip.tokenize(padded_t5xxl_string)['t5xxl']
+        else:
+            positive_tokens['t5xxl'] = clip.tokenize(positive_prompt)['t5xxl']
+
+        if len(positive_tokens['l']) != len(positive_tokens['g']):
+            empty = clip.tokenize('')
+            while len(positive_tokens['l']) < len(positive_tokens['g']):
+                positive_tokens['l'] += empty['l']
+            while len(positive_tokens['l']) > len(positive_tokens['g']):
+                positive_tokens['g'] += empty['g']
+        positive_conditioning, positive_pooled = clip.encode_from_tokens(positive_tokens, return_pooled=True)
+
+        # now negative
+        negative_tokens = clip.tokenize(negative_prompt)
+        if len(negative_prompt) == 0 or option_negative_clip_g == 'Empty':
+            negative_tokens['g'] = []
+        if len(negative_tokens['g']) < 77 and option_negative_clip_l == 'Padded':
+            padded_g_string = negative_prompt + padding_character * (77 - len(negative_tokens['g']))
+            negative_tokens['g'] = clip.tokenize(padded_g_string)['g']
+
+        if len(negative_prompt) == 0 or option_negative_clip_l == 'Empty':
+            negative_tokens['l'] = []
+        elif len(negative_tokens['l']) < 77 and option_negative_clip_l == 'Padded':
+            padded_l_string = negative_prompt + padding_character * (75 - len(negative_tokens['l']))
+            negative_tokens['l'] = clip.tokenize(padded_l_string)['l']
+        else:
+            negative_tokens['l'] = clip.tokenize(negative_prompt)['l']
+
+        if len(negative_prompt) == 0 or option_negative_t5xxl == 'Empty':
+            negative_tokens['t5xxl'] = []
+        elif len(negative_tokens['t5xxl']) < 512 and option_negative_t5xxl == 'Padded':
+            padded_t5xxl_string = negative_prompt + padding_character * (512 - len(negative_tokens['t5xxl']))
+            negative_tokens['t5xxl'] = clip.tokenize(padded_t5xxl_string)['t5xxl']
+        else:
+            negative_tokens['t5xxl'] = clip.tokenize(negative_prompt)['t5xxl']
+
+        if len(negative_tokens['l']) != len(negative_tokens['g']):
+            empty = clip.tokenize('')
+            while len(negative_tokens['l']) < len(negative_tokens['g']):
+                negative_tokens['l'] += empty['l']
+            while len(negative_tokens['l']) > len(negative_tokens['g']):
+                negative_tokens['g'] += empty['g']
+        negative_conditioning, negative_pooled = clip.encode_from_tokens(negative_tokens, return_pooled=True)
+
+        return (
+            [[positive_conditioning, {'pooled_output': positive_pooled}]],
+            [[negative_conditioning, {'pooled_output': negative_pooled}]],
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     'Wildcard Processor': WildcardProcessor,
     'Empty Latent Ratio Select SDXL': EmptyLatentRatioSelector,
@@ -5163,7 +5278,9 @@ NODE_CLASS_MAPPINGS = {
     'ImageOverlay': ImageOverlay,
     'CinematicLook': CinematicLook,
     'MosaicExpandImage': MosaicExpandImage,
-    'GetSubdirectories': GetSubdirectories
+    'GetSubdirectories': GetSubdirectories,
+    'TextPadderMikey': TextPadderMikey,
+    'SD3TextConditioningWithOptionsOnePrompt': SD3TextConditioningWithOptionsOnePrompt
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -5232,5 +5349,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'ImageOverlay': 'Image Overlay (Mikey)',
     'CinematicLook': 'Cinematic Look (Mikey)',
     'MosaicExpandImage': 'Mosaic Expand Image (Mikey)',
-    'GetSubdirectories': 'Get Subdirectories (Mikey)'
+    'GetSubdirectories': 'Get Subdirectories (Mikey)',
+    'TextPadderMikey': 'Text Padder (Mikey)',
+    'SD3TextConditioningWithOptionsOnePrompt': 'SD3 Text Conditioning With Options. One Prompt (Mikey)'
 }
